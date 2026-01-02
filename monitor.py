@@ -6,9 +6,9 @@ from pathlib import Path
 import requests
 
 VACANCY_THRESHOLD = int(os.getenv("VACANCY_THRESHOLD", "10"))
-DATE_POSTED_DAYS = int(os.getenv("DATE_POSTED_DAYS", "1"))  # scan "everything" newly posted
-RESULTS_PER_PAGE = int(os.getenv("RESULTS_PER_PAGE", "500"))  # max supported by API docs
-MAX_PAGES = int(os.getenv("MAX_PAGES", "50"))  # safety cap so a run doesn't go wild
+DATE_POSTED_DAYS = int(os.getenv("DATE_POSTED_DAYS", "1"))   # last 1 day = “everything new”
+RESULTS_PER_PAGE = int(os.getenv("RESULTS_PER_PAGE", "500")) # max
+MAX_PAGES = int(os.getenv("MAX_PAGES", "50"))                # safety cap
 
 SEEN_FILE = Path("seen.json")
 
@@ -29,10 +29,7 @@ def load_seen() -> set[str]:
         return set()
 
 def save_seen(seen: set[str]) -> None:
-    SEEN_FILE.write_text(
-        json.dumps({"seen_ids": sorted(seen)}, indent=2),
-        encoding="utf-8"
-    )
+    SEEN_FILE.write_text(json.dumps({"seen_ids": sorted(seen)}, indent=2), encoding="utf-8")
 
 def api_get_page(headers: dict, page: int) -> dict:
     url = (
@@ -50,8 +47,8 @@ def api_get_page(headers: dict, page: int) -> dict:
     return r.json()
 
 def main():
-    email = must_env("USAJOBS_EMAIL")
-    key = must_env("USAJOBS_API_KEY")
+    email = must_env("USAJOBS_EMAIL").strip()
+    key = must_env("USAJOBS_API_KEY").strip()
 
     headers = {
         "Host": "data.usajobs.gov",
@@ -64,7 +61,6 @@ def main():
     new_hits = []
     total_scanned = 0
 
-    # Page through results posted in the last N days
     for page in range(1, MAX_PAGES + 1):
         data = api_get_page(headers, page)
         items = data.get("SearchResult", {}).get("SearchResultItems", [])
@@ -88,7 +84,6 @@ def main():
             if vacancies < VACANCY_THRESHOLD:
                 continue
 
-            # Dedupe alerts
             if job_id and job_id in seen:
                 continue
 
@@ -97,9 +92,7 @@ def main():
             close = d.get("ApplicationCloseDate", "Unknown close date")
             url = d.get("PositionURI", "")
 
-            new_hits.append(
-                f"{vacancies} vacancies — {title} ({agency})\nCloses: {close}\n{url}"
-            )
+            new_hits.append(f"{vacancies} vacancies — {title} ({agency})\nCloses: {close}\n{url}")
             if job_id:
                 seen.add(job_id)
 
@@ -109,11 +102,10 @@ def main():
     if new_hits:
         print("\nMATCHES FOUND (new, not previously alerted):\n")
         print("\n\n".join(new_hits))
-        # Exit 2 to “alarm” the workflow and trigger notification
-        sys.exit(2)
-
-    print(f"No NEW postings found with vacancies >= {VACANCY_THRESHOLD}.")
-    sys.exit(0)
+        sys.exit(2)  # “alarm”
+    else:
+        print(f"No NEW postings found with vacancies >= {VACANCY_THRESHOLD}.")
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
