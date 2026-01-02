@@ -1,63 +1,70 @@
-import requests
-import re
 import os
+import re
+import sys
+import requests
 
-VACANCY_THRESHOLD = 10
+VACANCY_THRESHOLD = int(os.getenv("VACANCY_THRESHOLD", "5"))
 
-SEARCH_URL = "https://data.usajobs.gov/api/search?ResultsPerPage=50"
+# You can later narrow this search (series/keyword/location). For now it checks recent postings.
+SEARCH_URL = os.getenv("SEARCH_URL", "https://data.usajobs.gov/api/search?ResultsPerPage=50")
 
-HEADERS = {
-    "Host": "data.usajobs.gov",
-    "User-Agent": os.environ["USAJOBS_EMAIL"].strip(),
-    "Authorization-Key": os.environ["USAJOBS_API_KEY"].strip(),
-}
+# This matches text like "49 vacancies"
+VACANCY_RE = re.compile(r"(\d+)\s+vacancies?\b", re.IGNORECASE)
 
-
-VACANCY_RE = re.compile(r"(\d+)\s+vacancies?", re.IGNORECASE)
+def must_env(name: str) -> str:
+    v = os.getenv(name, "")
+    v = v.strip()
+    if not v:
+        print(f"Missing required secret/environment variable: {name}")
+        sys.exit(1)
+    return v
 
 def main():
-    r = requests.get(SEARCH_URL, headers=HEADERS, timeout=30)
-    r.raise_for_status()
-    data = r.json()
+    email = must_env("USAJOBS_EMAIL")
+    key = must_env("USAJOBS_API_KEY")
 
-    items = data["SearchResult"]["SearchResultItems"]
+    headers = {
+        "Host": "data.usajobs.gov",
+        "User-Agent": email,
+        "Authorization-Key": key,
+        "Accept": "application/json",
+    }
 
-    alerts = []
+    r = requests.get(SEARCH_URL, headers=headers, timeout=30)
+    if r.status_code != 200:
+        print("USAJOBS API request failed.")
+        print("Status:", r.status_code)
+        print("Body (first 500 chars):", r.text[:500])
+        sys.exit(1)
+
+    items = r.json().get("SearchResult", {}).get("SearchResultItems", [])
+    hits = []
 
     for item in items:
-        d = item["MatchedObjectDescriptor"]
+        d = item.get("MatchedObjectDescriptor", {}) or {}
         url = d.get("PositionURI")
+        title = d.get("PositionTitle", "Unknown title")
 
         if not url:
             continue
 
-        page = requests.get(url, timeout=30).text
-        match = VACANCY_RE.search(page)
-
-        if not match:
+        page = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).text
+        m = VACANCY_RE.search(page)
+        if not m:
             continue
 
-        vacancies = int(match.group(1))
-
+        vacancies = int(m.group(1))
         if vacancies > VACANCY_THRESHOLD:
-            alerts.append(
-                f"{d['PositionTitle']} ({vacancies} vacancies)\n{url}\n"
-            )
+            hits.append(f"{vacancies} vacancies — {title}\n{url}")
 
-    if alerts:
-        message = "\n".join(alerts)
-        requests.post(
-            "https://api.github.com/repos/{repo}/issues".format(
-                repo=os.environ["GITHUB_REPO"]
-            ),
-            headers={
-                "Authorization": f"token {os.environ['GITHUB_TOKEN']}"
-            },
-            json={
-                "title": "USAJOBS vacancy alert",
-                "body": message
-            }
-        )
+    if hits:
+        print("MATCHES FOUND (vacancies > threshold):\n")
+        print("\n\n".join(hits))
+        # Exit code 2 = intentional “alarm” so the workflow shows Red X
+        sys.exit(2)
+
+    print("No postings found over threshold.")
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()
