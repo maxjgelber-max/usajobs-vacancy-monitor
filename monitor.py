@@ -1,23 +1,53 @@
+import json
 import os
-import re
 import sys
+from pathlib import Path
+
 import requests
 
-VACANCY_THRESHOLD = int(os.getenv("VACANCY_THRESHOLD", "0"))
+VACANCY_THRESHOLD = int(os.getenv("VACANCY_THRESHOLD", "10"))
+DATE_POSTED_DAYS = int(os.getenv("DATE_POSTED_DAYS", "1"))  # scan "everything" newly posted
+RESULTS_PER_PAGE = int(os.getenv("RESULTS_PER_PAGE", "500"))  # max supported by API docs
+MAX_PAGES = int(os.getenv("MAX_PAGES", "50"))  # safety cap so a run doesn't go wild
 
-# You can later narrow this search (series/keyword/location). For now it checks recent postings.
-SEARCH_URL = os.getenv("SEARCH_URL", "https://data.usajobs.gov/api/search?ResultsPerPage=50")
-
-# This matches text like "49 vacancies"
-VACANCY_RE = re.compile(r"(\d+)\s+vacancies?\b", re.IGNORECASE)
+SEEN_FILE = Path("seen.json")
 
 def must_env(name: str) -> str:
-    v = os.getenv(name, "")
-    v = v.strip()
+    v = os.getenv(name, "").strip()
     if not v:
         print(f"Missing required secret/environment variable: {name}")
         sys.exit(1)
     return v
+
+def load_seen() -> set[str]:
+    if not SEEN_FILE.exists():
+        return set()
+    try:
+        data = json.loads(SEEN_FILE.read_text(encoding="utf-8"))
+        return set(data.get("seen_ids", []))
+    except Exception:
+        return set()
+
+def save_seen(seen: set[str]) -> None:
+    SEEN_FILE.write_text(
+        json.dumps({"seen_ids": sorted(seen)}, indent=2),
+        encoding="utf-8"
+    )
+
+def api_get_page(headers: dict, page: int) -> dict:
+    url = (
+        "https://data.usajobs.gov/api/search"
+        f"?DatePosted={DATE_POSTED_DAYS}"
+        f"&ResultsPerPage={RESULTS_PER_PAGE}"
+        f"&Page={page}"
+    )
+    r = requests.get(url, headers=headers, timeout=30)
+    if r.status_code != 200:
+        print("USAJOBS API request failed.")
+        print("Status:", r.status_code)
+        print("Body (first 500 chars):", r.text[:500])
+        sys.exit(1)
+    return r.json()
 
 def main():
     email = must_env("USAJOBS_EMAIL")
@@ -30,40 +60,59 @@ def main():
         "Accept": "application/json",
     }
 
-    r = requests.get(SEARCH_URL, headers=headers, timeout=30)
-    if r.status_code != 200:
-        print("USAJOBS API request failed.")
-        print("Status:", r.status_code)
-        print("Body (first 500 chars):", r.text[:500])
-        sys.exit(1)
+    seen = load_seen()
+    new_hits = []
+    total_scanned = 0
 
-    items = r.json().get("SearchResult", {}).get("SearchResultItems", [])
-    hits = []
+    # Page through results posted in the last N days
+    for page in range(1, MAX_PAGES + 1):
+        data = api_get_page(headers, page)
+        items = data.get("SearchResult", {}).get("SearchResultItems", [])
+        if not items:
+            break
 
-    for item in items:
-        d = item.get("MatchedObjectDescriptor", {}) or {}
-        url = d.get("PositionURI")
-        title = d.get("PositionTitle", "Unknown title")
+        for item in items:
+            total_scanned += 1
+            job_id = str(item.get("MatchedObjectId", "")).strip()
+            d = item.get("MatchedObjectDescriptor", {}) or {}
 
-        if not url:
-            continue
+            vacancies = d.get("NumberOfVacancies")
+            if vacancies is None:
+                continue
 
-        page = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30).text
-        m = VACANCY_RE.search(page)
-        if not m:
-            continue
+            try:
+                vacancies = int(vacancies)
+            except Exception:
+                continue
 
-        vacancies = int(m.group(1))
-        if vacancies > VACANCY_THRESHOLD:
-            hits.append(f"{vacancies} vacancies — {title}\n{url}")
+            if vacancies < VACANCY_THRESHOLD:
+                continue
 
-    if hits:
-        print("MATCHES FOUND (vacancies > threshold):\n")
-        print("\n\n".join(hits))
-        # Exit code 2 = intentional “alarm” so the workflow shows Red X
+            # Dedupe alerts
+            if job_id and job_id in seen:
+                continue
+
+            title = d.get("PositionTitle", "Unknown title")
+            agency = d.get("OrganizationName", "Unknown agency")
+            close = d.get("ApplicationCloseDate", "Unknown close date")
+            url = d.get("PositionURI", "")
+
+            new_hits.append(
+                f"{vacancies} vacancies — {title} ({agency})\nCloses: {close}\n{url}"
+            )
+            if job_id:
+                seen.add(job_id)
+
+    save_seen(seen)
+
+    print(f"Scanned {total_scanned} postings from last {DATE_POSTED_DAYS} day(s).")
+    if new_hits:
+        print("\nMATCHES FOUND (new, not previously alerted):\n")
+        print("\n\n".join(new_hits))
+        # Exit 2 to “alarm” the workflow and trigger notification
         sys.exit(2)
 
-    print("No postings found over threshold.")
+    print(f"No NEW postings found with vacancies >= {VACANCY_THRESHOLD}.")
     sys.exit(0)
 
 if __name__ == "__main__":
