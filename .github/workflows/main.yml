@@ -27,7 +27,7 @@ jobs:
         env:
           USAJOBS_EMAIL: ${{ secrets.USAJOBS_EMAIL }}
           USAJOBS_API_KEY: ${{ secrets.USAJOBS_API_KEY }}
-          VACANCY_THRESHOLD: "10"
+          VACANCY_THRESHOLD: "1"
           DATE_POSTED_DAYS: "1"
           RESULTS_PER_PAGE: "500"
           MAX_PAGES: "50"
