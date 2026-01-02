@@ -8,9 +8,10 @@ SEARCH_URL = "https://data.usajobs.gov/api/search?ResultsPerPage=50"
 
 HEADERS = {
     "Host": "data.usajobs.gov",
-    "User-Agent": os.environ["USAJOBS_EMAIL"],
-    "Authorization-Key": os.environ["USAJOBS_API_KEY"],
+    "User-Agent": os.environ["USAJOBS_EMAIL"].strip(),
+    "Authorization-Key": os.environ["USAJOBS_API_KEY"].strip(),
 }
+
 
 VACANCY_RE = re.compile(r"(\d+)\s+vacancies?", re.IGNORECASE)
 
