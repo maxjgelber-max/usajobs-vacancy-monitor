@@ -3,7 +3,7 @@ import re
 import sys
 import requests
 
-VACANCY_THRESHOLD = int(os.getenv("VACANCY_THRESHOLD", "5"))
+VACANCY_THRESHOLD = int(os.getenv("VACANCY_THRESHOLD", "0"))
 
 # You can later narrow this search (series/keyword/location). For now it checks recent postings.
 SEARCH_URL = os.getenv("SEARCH_URL", "https://data.usajobs.gov/api/search?ResultsPerPage=50")
