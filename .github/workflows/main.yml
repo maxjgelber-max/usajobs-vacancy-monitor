@@ -1,5 +1,6 @@
 name: USAJOBS Vacancy Monitor
-
+permissions:
+  contents: write
 on:
   schedule:
     - cron: "0 */6 * * *"   # every 6 hours
@@ -22,4 +23,14 @@ jobs:
         env:
           USAJOBS_EMAIL: ${{ secrets.USAJOBS_EMAIL }}
           USAJOBS_API_KEY: ${{ secrets.USAJOBS_API_KEY }}
+          VACANCY_THRESHOLD: "10"
+    DATE_POSTED_DAYS: "1"
+    RESULTS_PER_PAGE: "500"
+    MAX_PAGES: "50"
         run: python monitor.py
+- name: Commit updated seen.json (if changed)
+  run: |
+    git config user.name "github-actions[bot]"
+    git config user.email "github-actions[bot]@users.noreply.github.com"
+    git add seen.json
+    git diff --cached --quiet || (git commit -m "Update seen ids" && git push)
